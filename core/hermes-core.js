@@ -65,6 +65,13 @@ const logger = winston.createLogger({
 // SEGURIDAD - OWNER
 // ============================================
 
+// Optionally pin your WhatsApp identities here (skips the first-contact flow).
+// WhatsApp may deliver messages as a LID and/or a phone number, so add both.
+// Format: '123456789@lid' or '34612345678@c.us'
+const AUTHORIZED_IDENTITIES = new Set(
+  (process.env.OWNER_NUMBER || '').split(',').map(s => s.trim()).filter(Boolean)
+);
+
 function loadRegisteredOwner() {
   try {
     if (fs.existsSync(CONFIG.OWNER_FILE)) {
@@ -72,6 +79,7 @@ function loadRegisteredOwner() {
       const parsed = JSON.parse(data);
       OWNER_NUMBER = parsed.ownerNumber;
       isFirstContact = false;
+      (parsed.identities || [parsed.ownerNumber]).filter(Boolean).forEach(id => AUTHORIZED_IDENTITIES.add(id));
       logger.info(`Dueño registrado cargado: ${OWNER_NUMBER}`);
       return true;
     }
@@ -83,9 +91,10 @@ function loadRegisteredOwner() {
 
 async function registerOwner(phoneNumber) {
   try {
-    const data = { ownerNumber: phoneNumber, registeredAt: new Date().toISOString(), version: '1.2.0' };
+    const data = { ownerNumber: phoneNumber, identities: [phoneNumber], registeredAt: new Date().toISOString(), version: '1.2.0' };
     await fs.writeJson(CONFIG.OWNER_FILE, data, { spaces: 2 });
     OWNER_NUMBER = phoneNumber;
+    AUTHORIZED_IDENTITIES.add(phoneNumber);
     isFirstContact = false;
     logger.info(`NUEVO DUEÑO REGISTRADO: ${phoneNumber}`);
     return true;
@@ -95,13 +104,8 @@ async function registerOwner(phoneNumber) {
   }
 }
 
-// Add your WhatsApp LID and/or phone number here after first scan
-// Format: '123456789@lid' or '34612345678@c.us'
-const AUTHORIZED_IDENTITIES = new Set([
-  // populated automatically on first contact and via OWNER_NUMBER env
-]);
-
 function isAuthorized(number) {
+  // Sin dueño y sin identidades fijadas → modo registro abierto (primer contacto manda)
   if (!OWNER_NUMBER && AUTHORIZED_IDENTITIES.size === 0) return true;
   return AUTHORIZED_IDENTITIES.has(number);
 }
