@@ -1,0 +1,25 @@
+module.exports = {
+  apps: [{
+    name: 'hermes',
+    script: './core/hermes-core.js',
+    cwd: process.cwd(),
+    instances: 1,
+    exec_mode: 'fork',
+    max_memory_restart: '1G',
+    env: {
+      NODE_ENV: 'production',
+    },
+    log_file: './logs/combined.log',
+    out_file: './logs/out.log',
+    error_file: './logs/error.log',
+    log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+    merge_logs: true,
+    autorestart: true,
+    restart_delay: 5000,
+    max_restarts: 10,
+    min_uptime: '10s',
+    watch: false,
+    kill_timeout: 5000,
+    listen_timeout: 10000,
+  }],
+};

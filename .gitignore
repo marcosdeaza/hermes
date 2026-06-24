@@ -1,0 +1,9 @@
+node_modules/
+.env
+.wwebjs_auth/
+.wwebjs_cache/
+logs/
+projects/
+.owner_registered
+qr-code.png
+*.log
