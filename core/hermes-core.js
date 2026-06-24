@@ -29,6 +29,9 @@ const CONFIG = {
   PROJECTS_PATH: process.env.PROJECTS_PATH || './projects',
   LOG_PATH: process.env.LOG_PATH || './logs',
   MAX_OUTPUT_LENGTH: parseInt(process.env.MAX_OUTPUT_LENGTH) || 10000,
+  MAX_ITERATIONS: parseInt(process.env.MAX_ITERATIONS) || 60,
+  BASH_TIMEOUT: parseInt(process.env.BASH_TIMEOUT) || 300000, // 5 min para npm install / builds / clones
+  CONTEXT_CHAR_BUDGET: parseInt(process.env.CONTEXT_CHAR_BUDGET) || 320000, // ~80K tokens antes de podar
   OWNER_FILE: './.owner_registered',
 };
 
@@ -300,10 +303,18 @@ async function executeTool(name, args) {
     case 'bash_exec': {
       if (isCommandBlocked(args.command)) return 'Comando bloqueado por seguridad';
       return new Promise((resolve) => {
-        exec(args.command, { timeout: 60000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
-          let output = stdout || stderr || err?.message || 'Sin output';
-          if (output.length > CONFIG.MAX_OUTPUT_LENGTH) output = output.substring(0, CONFIG.MAX_OUTPUT_LENGTH) + '\n...(truncado)';
-          resolve(output);
+        exec(args.command, { timeout: CONFIG.BASH_TIMEOUT, maxBuffer: 8 * 1024 * 1024, shell: '/bin/bash' }, (err, stdout, stderr) => {
+          let body = [stdout, stderr].filter(Boolean).join('\n').trim();
+          if (body.length > CONFIG.MAX_OUTPUT_LENGTH) body = body.substring(0, CONFIG.MAX_OUTPUT_LENGTH) + '\n...(truncado)';
+          // Estado explícito para que el modelo sepa si funcionó o falló (evita bucles de reintento)
+          let status;
+          if (err) {
+            if (err.killed && err.signal === 'SIGTERM') status = `[TIMEOUT tras ${CONFIG.BASH_TIMEOUT / 1000}s — el comando seguía corriendo]`;
+            else status = `[FALLÓ exit ${err.code ?? '?'}]`;
+          } else {
+            status = '[OK exit 0]';
+          }
+          resolve(`${status}\n${body || '(sin output)'}`);
         });
       });
     }
@@ -443,13 +454,36 @@ SEGURIDAD:
 - No ejecutas comandos peligrosos`;
 
   let messages = [{ role: 'system', content: systemPrompt }, ...history];
-  const maxIterations = 25;
+  const maxIterations = CONFIG.MAX_ITERATIONS;
   let iterations = 0;
+  let lastAssistantText = null;   // última respuesta de texto del modelo (para no perder trabajo)
+  let windingDown = false;        // ya inyectamos el aviso de "termina y resume"
 
   while (iterations < maxIterations) {
     iterations++;
+
+    // — Wind-down graceful: en lugar de cortar en seco con un error inútil,
+    //   avisamos al modelo unos pasos antes para que cierre y dé un resumen real —
+    if (!windingDown && iterations >= maxIterations - 4) {
+      windingDown = true;
+      messages.push({
+        role: 'user',
+        content: 'SISTEMA: te quedan pocos pasos. Deja de ejecutar herramientas, termina solo lo crítico y devuélveme AHORA un resumen claro de lo que has hecho y lo que queda pendiente.'
+      });
+    }
+
+    // — Poda de contexto: evita que el loop reviente el context window (fallo silencioso) —
+    messages = trimMessages(messages, CONFIG.CONTEXT_CHAR_BUDGET);
+
+    // — Heartbeat: avisa al usuario que sigue trabajando (no parece colgado) —
+    if (iterations > 1 && iterations % 6 === 0) {
+      try { await client.sendMessage(userId, `⏳ _Trabajando... (paso ${iterations}/${maxIterations})_`); } catch (_) {}
+    }
+    try { await client.sendPresenceUpdate('composing', userId); } catch (_) {}
+
+    let response;
     try {
-      const response = await axios.post(`${CONFIG.AI_URL}/chat/completions`, {
+      response = await axios.post(`${CONFIG.AI_URL}/chat/completions`, {
         model: CURRENT_MODEL,
         messages,
         tools,
@@ -458,32 +492,80 @@ SEGURIDAD:
         temperature: 0.7
       }, {
         headers: { 'Authorization': `Bearer ${CONFIG.AI_KEY}`, 'Content-Type': 'application/json' },
-        timeout: 60000
+        timeout: 120000
       });
-
-      const msg = response.data.choices[0].message;
-      messages.push(msg);
-
-      if (!msg.tool_calls || msg.tool_calls.length === 0) {
-        const formatted = formatForWhatsApp(msg.content);
-        history.push({ role: 'assistant', content: msg.content });
-        if (history.length > 20) conversationHistory.set(userId, history.slice(-20));
-        return formatted;
-      }
-
-      for (const toolCall of msg.tool_calls) {
-        const args = JSON.parse(toolCall.function.arguments);
-        const result = await executeTool(toolCall.function.name, args);
-        messages.push({ role: 'tool', tool_call_id: toolCall.id, content: String(result).substring(0, 8000) });
-      }
     } catch (err) {
-      logger.error('Error llamando a b.ai API:', err.message || err);
-      if (err.response) logger.error('Respuesta API:', JSON.stringify(err.response.data));
-      return null;
+      const apiErr = err.response ? JSON.stringify(err.response.data) : (err.message || String(err));
+      logger.error(`Error API (iter ${iterations}): ${apiErr}`);
+      // Context-length → poda agresiva y reintenta en vez de morir
+      if (/context|too long|maximum.*tokens|length/i.test(apiErr)) {
+        messages = trimMessages(messages, Math.floor(CONFIG.CONTEXT_CHAR_BUDGET / 2));
+        continue;
+      }
+      // Blip de red / 5xx → un reintento con espera; si ya teníamos texto, lo devolvemos
+      if (iterations < maxIterations) {
+        await new Promise(r => setTimeout(r, 2500));
+        continue;
+      }
+      return lastAssistantText ? formatForWhatsApp(lastAssistantText) : null;
+    }
+
+    const msg = response.data.choices[0].message;
+    messages.push(msg);
+    if (msg.content) lastAssistantText = msg.content;
+
+    // Sin tool_calls → respuesta final
+    if (!msg.tool_calls || msg.tool_calls.length === 0) {
+      history.push({ role: 'assistant', content: msg.content });
+      if (history.length > 20) conversationHistory.set(userId, history.slice(-20));
+      return formatForWhatsApp(msg.content);
+    }
+
+    // Ejecutar cada tool call de forma aislada: un fallo de UNA no mata toda la ejecución
+    for (const toolCall of msg.tool_calls) {
+      let result;
+      try {
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        result = await executeTool(toolCall.function.name, args);
+      } catch (e) {
+        result = `Error ejecutando ${toolCall.function?.name}: ${e.message}. Revisa los argumentos e inténtalo de otra forma.`;
+        logger.warn(`Tool ${toolCall.function?.name} falló: ${e.message}`);
+      }
+      messages.push({ role: 'tool', tool_call_id: toolCall.id, content: String(result).substring(0, 6000) });
     }
   }
 
-  return 'Demasiadas iteraciones. Intenta con una petición más simple.';
+  // Llegamos al tope: devolvemos el último texto útil (el resumen del wind-down), nunca un error vacío
+  if (lastAssistantText) {
+    history.push({ role: 'assistant', content: lastAssistantText });
+    if (history.length > 20) conversationHistory.set(userId, history.slice(-20));
+    return formatForWhatsApp(lastAssistantText);
+  }
+  return 'He hecho muchos pasos pero la tarea es muy grande. Dime el siguiente paso concreto y sigo desde donde lo dejé.';
+}
+
+// Poda segura de contexto: conserva system + primer mensaje de usuario (la tarea) y la cola
+// más reciente que entre en el presupuesto, sin dejar mensajes 'tool' huérfanos (rompen la API).
+function trimMessages(messages, maxChars) {
+  const size = (m) => (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length) + 200;
+  let total = messages.reduce((s, m) => s + size(m), 0);
+  if (total <= maxChars) return messages;
+
+  const system = messages[0];
+  const firstUser = messages[1];
+  let tail = messages.slice(2);
+  let tailTotal = tail.reduce((s, m) => s + size(m), 0);
+  const head = size(system) + (firstUser ? size(firstUser) : 0);
+
+  // Quita los más antiguos de la cola hasta entrar en presupuesto
+  while (tail.length && head + tailTotal > maxChars) {
+    tailTotal -= size(tail[0]);
+    tail.shift();
+  }
+  // No empezar la cola con un 'tool' huérfano (su 'assistant' con tool_calls se fue)
+  while (tail.length && tail[0].role === 'tool') tail.shift();
+
+  return [system, ...(firstUser ? [firstUser] : []), ...tail];
 }
 
 // ============================================
