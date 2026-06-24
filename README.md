@@ -15,6 +15,10 @@ Hermes is an autonomous coding agent that lives on your Linux server and is cont
 - **Single-owner security** — the first number to contact Hermes becomes the only authorized user
 - **Auto-reconnect watchdog** — Chrome/Puppeteer health checked every 3 minutes
 
+## WhatsApp number
+
+Hermes needs a dedicated WhatsApp number to operate — ideally not your personal one. A good approach is to register a virtual number through an online temporary SMS service (search for services like smsman, smsspool, or similar). Get a number, verify WhatsApp with the OTP, then scan the QR. That's it — your main phone stays clean.
+
 ## Requirements
 
 - Node.js 18+
