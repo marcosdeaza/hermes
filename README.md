@@ -5,7 +5,7 @@ Hermes is an autonomous coding agent that lives on your Linux server and is cont
 ## Features
 
 - **Voice messages** → transcribed via Groq Whisper, then processed
-- **Image messages** → analyzed via vision models (kimi-k2.5 / glm-5.2)
+- **Image messages** → analyzed via vision-capable models
 - **Bash execution** on the server with safety guardrails
 - **File read/write** for building and editing projects
 - **Git clone** any repository
@@ -40,8 +40,8 @@ cp .env.example .env
 
 | Key | Where to get it |
 |-----|----------------|
-| `BAI_API_KEY` | [b.ai](https://b.ai) — access to kimi-k2.5 and glm-5.2 |
-| `GROQ_API_KEY` | [console.groq.com](https://console.groq.com) — free Whisper transcription |
+| `AI_API_KEY` | OpenRouter, z.ai, or any OpenAI-compatible provider |
+| `GROQ_API_KEY` | console.groq.com — free Whisper transcription |
 
 ## Run
 
@@ -61,8 +61,7 @@ On first launch, a QR code is saved to `qr-code.png`. Scan it with WhatsApp (Set
 
 | Command | Action |
 |---------|--------|
-| `!modelo kimi` | Switch to kimi-k2.5 |
-| `!modelo glm` | Switch to glm-5.2 |
+| `!modelo <model-id>` | Switch model at runtime |
 | `!reset` | Clear conversation history |
 | `!status` | Show server CPU/RAM/disk info |
 | `!help` | Show all commands |
@@ -87,9 +86,17 @@ Or just send a voice note — Hermes transcribes it and responds.
 
 ## Models
 
-Hermes uses [b.ai](https://b.ai) which provides access to:
-- **kimi-k2.5** — default, strong coding and reasoning, supports vision
-- **glm-5.2** — alternative model
+Hermes works with any OpenAI-compatible provider. The default config points to **OpenRouter**, which gives you access to virtually every major model from a single API key — Claude, GPT-4o, Gemini, Llama, Mistral, and more.
+
+**z.ai** is another solid option if you want access to frontier reasoning models.
+
+Switch models at runtime without restarting:
+
+```
+!modelo anthropic/claude-opus-4-8
+!modelo openai/gpt-4o
+!modelo google/gemini-2.5-pro
+```
 
 Voice transcription uses **Groq Whisper large-v3** (free tier available).
 

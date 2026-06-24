@@ -22,8 +22,8 @@ const winston = require('winston');
 // ============================================
 
 const CONFIG = {
-  BAI_KEY: process.env.BAI_API_KEY,
-  BAI_URL: process.env.BAI_BASE_URL || 'https://api.b.ai/v1',
+  AI_KEY: process.env.AI_API_KEY,
+  AI_URL: process.env.AI_BASE_URL || 'https://openrouter.ai/api/v1',
   GROQ_KEY: process.env.GROQ_API_KEY,
   WHATSAPP_SESSION_PATH: process.env.WHATSAPP_SESSION_PATH || './.wwebjs_auth',
   PROJECTS_PATH: process.env.PROJECTS_PATH || './projects',
@@ -32,7 +32,7 @@ const CONFIG = {
   OWNER_FILE: './.owner_registered',
 };
 
-let CURRENT_MODEL = process.env.BAI_MODEL || 'kimi-k2.5';
+let CURRENT_MODEL = process.env.AI_MODEL || 'anthropic/claude-sonnet-4-5';
 const conversationHistory = new Map();
 let OWNER_NUMBER = process.env.OWNER_NUMBER || null;
 let isFirstContact = !OWNER_NUMBER && !fs.existsSync(CONFIG.OWNER_FILE);
@@ -449,7 +449,7 @@ SEGURIDAD:
   while (iterations < maxIterations) {
     iterations++;
     try {
-      const response = await axios.post(`${CONFIG.BAI_URL}/chat/completions`, {
+      const response = await axios.post(`${CONFIG.AI_URL}/chat/completions`, {
         model: CURRENT_MODEL,
         messages,
         tools,
@@ -457,7 +457,7 @@ SEGURIDAD:
         max_tokens: 4096,
         temperature: 0.7
       }, {
-        headers: { 'Authorization': `Bearer ${CONFIG.BAI_KEY}`, 'Content-Type': 'application/json' },
+        headers: { 'Authorization': `Bearer ${CONFIG.AI_KEY}`, 'Content-Type': 'application/json' },
         timeout: 60000
       });
 
@@ -592,9 +592,8 @@ client.on('message', async (msg) => {
   // Comandos especiales
   if (text.startsWith('!modelo')) {
     const model = text.split(' ')[1]?.toLowerCase();
-    if (model === 'kimi') { CURRENT_MODEL = 'kimi-k2.5'; await msg.reply('Modelo → kimi-k2.5'); }
-    else if (model === 'glm') { CURRENT_MODEL = 'glm-5.2'; await msg.reply('Modelo → glm-5.2'); }
-    else await msg.reply('Uso: !modelo kimi | !modelo glm');
+    if (model) { CURRENT_MODEL = model; await msg.reply(`Modelo → ${CURRENT_MODEL}`); }
+    else await msg.reply(`Modelo actual: ${CURRENT_MODEL}\nUso: !modelo <model-id>\nEj: !modelo anthropic/claude-sonnet-4-5`);
     return;
   }
   if (text === '!reset') { conversationHistory.delete(sender); await msg.reply('Historial limpiado'); return; }
@@ -609,7 +608,7 @@ client.on('message', async (msg) => {
       '🎤 *Audio*: envía notas de voz, las transcribe y responde\n' +
       '🖼️ *Imágenes*: envía fotos, las analiza y actúa\n' +
       '💻 *Código*: crea, despliega y gestiona proyectos\n\n' +
-      '*Comandos*:\n!modelo kimi | !modelo glm\n!reset | !status | !help\n\n' +
+      '*Comandos*:\n!modelo <model-id> — cambia modelo en runtime\n!reset — limpia el historial\n!status — info del servidor\n!help — este menú\n\n' +
       `Modelo actual: ${CURRENT_MODEL}`
     );
     return;
