@@ -30,8 +30,9 @@ const CONFIG = {
   LOG_PATH: process.env.LOG_PATH || './logs',
   MAX_OUTPUT_LENGTH: parseInt(process.env.MAX_OUTPUT_LENGTH) || 10000,
   MAX_ITERATIONS: parseInt(process.env.MAX_ITERATIONS) || 60,
-  BASH_TIMEOUT: parseInt(process.env.BASH_TIMEOUT) || 300000, // 5 min para npm install / builds / clones
-  CONTEXT_CHAR_BUDGET: parseInt(process.env.CONTEXT_CHAR_BUDGET) || 320000, // ~80K tokens antes de podar
+  BASH_TIMEOUT: parseInt(process.env.BASH_TIMEOUT) || 120000,   // 2 min por comando bash
+  CONTEXT_CHAR_BUDGET: parseInt(process.env.CONTEXT_CHAR_BUDGET) || 320000,
+  TASK_TIMEOUT: parseInt(process.env.TASK_TIMEOUT) || 8 * 60 * 1000, // 8 min máx por tarea completa
   OWNER_FILE: './.owner_registered',
 };
 
@@ -470,10 +471,17 @@ SEGURIDAD:
   let messages = [{ role: 'system', content: systemPrompt }, ...history];
   const maxIterations = CONFIG.MAX_ITERATIONS;
   let iterations = 0;
-  let lastAssistantText = null;   // última respuesta de texto del modelo (para no perder trabajo)
+  let lastAssistantText = null;
+  const taskDeadline = Date.now() + CONFIG.TASK_TIMEOUT;
 
   while (iterations < maxIterations) {
     iterations++;
+
+    // Timeout total de tarea: corta el loop si llevamos más de TASK_TIMEOUT
+    if (Date.now() > taskDeadline) {
+      logger.warn(`[TIMEOUT] Tarea superó ${CONFIG.TASK_TIMEOUT / 60000} min.`);
+      break;
+    }
 
     // — Poda de contexto: evita que el loop reviente el context window (fallo silencioso) —
     messages = trimMessages(messages, CONFIG.CONTEXT_CHAR_BUDGET);
@@ -638,6 +646,12 @@ client.on('message', async (msg) => {
   if (!isAuthorized(sender)) {
     logger.warn(`[SEGURIDAD] Acceso no autorizado: ${sender}`);
     return;
+  }
+
+  // Ack inmediato: confirma que el mensaje llegó aunque Hermes esté ocupado con otra tarea
+  const isCmd = (msg.body || '').startsWith('!');
+  if (!isCmd && msg.type === 'chat') {
+    try { await msg.reply('_Procesando..._'); } catch (_) {}
   }
 
   let text = msg.body || '';
