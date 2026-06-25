@@ -461,29 +461,12 @@ SEGURIDAD:
   const maxIterations = CONFIG.MAX_ITERATIONS;
   let iterations = 0;
   let lastAssistantText = null;   // última respuesta de texto del modelo (para no perder trabajo)
-  let windingDown = false;        // ya inyectamos el aviso de "termina y resume"
 
   while (iterations < maxIterations) {
     iterations++;
 
-    // — Wind-down graceful: en lugar de cortar en seco con un error inútil,
-    //   avisamos al modelo unos pasos antes para que cierre y dé un resumen real —
-    if (!windingDown && iterations >= maxIterations - 4) {
-      windingDown = true;
-      messages.push({
-        role: 'user',
-        content: 'SISTEMA: te quedan pocos pasos. Deja de ejecutar herramientas, termina solo lo crítico y devuélveme AHORA un resumen claro de lo que has hecho y lo que queda pendiente.'
-      });
-    }
-
     // — Poda de contexto: evita que el loop reviente el context window (fallo silencioso) —
     messages = trimMessages(messages, CONFIG.CONTEXT_CHAR_BUDGET);
-
-    // — Heartbeat: avisa al usuario que sigue trabajando (no parece colgado) —
-    if (iterations > 1 && iterations % 6 === 0) {
-      try { await client.sendMessage(userId, `⏳ _Trabajando... (paso ${iterations}/${maxIterations})_`); } catch (_) {}
-    }
-    try { await client.sendPresenceUpdate('composing', userId); } catch (_) {}
 
     let response;
     try {
@@ -539,7 +522,7 @@ SEGURIDAD:
     }
   }
 
-  // Llegamos al tope: devolvemos el último texto útil (el resumen del wind-down), nunca un error vacío
+  // Llegamos al tope: devolvemos el último texto útil, nunca un error vacío
   if (lastAssistantText) {
     history.push({ role: 'assistant', content: lastAssistantText });
     if (history.length > 20) conversationHistory.set(userId, history.slice(-20));
