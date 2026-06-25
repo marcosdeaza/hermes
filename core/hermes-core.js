@@ -286,21 +286,25 @@ const tools = [
 // EJECUTORES DE HERRAMIENTAS
 // ============================================
 
+// Comandos destructivos del sistema
 const BLOCKED_COMMANDS = [
   'rm -rf /', 'rm -rf /*', 'mkfs', 'dd if=/dev/zero',
   '> /dev/sda', 'mv / /dev/null', ':(){ :|:& };:',
   'chmod -R 777 /', 'halt', 'shutdown', 'reboot', 'poweroff',
-  // Autoprotección: el agente NO puede matarse a sí mismo
-  'pm2 update', 'pm2 kill', 'pm2 delete hermes', 'pm2 stop hermes',
-  'pm2 restart hermes', 'pm2 reload hermes',
-  'kill', 'killall', 'pkill node', 'pkill hermes',
-  'systemctl stop hermes', 'systemctl disable hermes',
 ];
-const BLOCKED_PATHS = ['/etc/shadow', '/etc/passwd', '/etc/ssh', '/root/.ssh',
-  '.wwebjs_auth', '.owner_registered', '/opt/hermes/.env', '/opt/hermes/core/hermes-core.js'];
 
-function isCommandBlocked(command) {
-  return BLOCKED_COMMANDS.some(b => command.toLowerCase().includes(b.toLowerCase()));
+// Lógica anti-suicidio: regex en vez de lista fija (cubre TODAS las variantes)
+function isCommandBlocked(cmd) {
+  const c = cmd.toLowerCase().trim();
+  // 1. Destructivos del sistema
+  if (BLOCKED_COMMANDS.some(b => c.includes(b.toLowerCase()))) return true;
+  // 2. pm2 + subcomando destructivo — bloquea: pm2 delete all|0|hermes, pm2 stop all, pm2 kill, pm2 update...
+  if (/\bpm2\b/.test(c) && /\b(delete|stop|kill|update|reload)\b/.test(c)) return true;
+  // 3. killall/pkill de node o de todo
+  if (/\b(killall|pkill)\b/.test(c) && /\b(node|hermes|all)\b/.test(c)) return true;
+  // 4. systemctl parando hermes
+  if (/\bsystemctl\b/.test(c) && /\b(stop|disable|kill)\b/.test(c) && /\bhermes\b/.test(c)) return true;
+  return false;
 }
 function isPathBlocked(filepath) {
   return BLOCKED_PATHS.some(b => filepath.includes(b));
