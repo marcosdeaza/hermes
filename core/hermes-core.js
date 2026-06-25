@@ -290,8 +290,14 @@ const BLOCKED_COMMANDS = [
   'rm -rf /', 'rm -rf /*', 'mkfs', 'dd if=/dev/zero',
   '> /dev/sda', 'mv / /dev/null', ':(){ :|:& };:',
   'chmod -R 777 /', 'halt', 'shutdown', 'reboot', 'poweroff',
+  // Autoprotección: el agente NO puede matarse a sí mismo
+  'pm2 update', 'pm2 kill', 'pm2 delete hermes', 'pm2 stop hermes',
+  'pm2 restart hermes', 'pm2 reload hermes',
+  'kill', 'killall', 'pkill node', 'pkill hermes',
+  'systemctl stop hermes', 'systemctl disable hermes',
 ];
-const BLOCKED_PATHS = ['/etc/shadow', '/etc/passwd', '/etc/ssh', '/root/.ssh'];
+const BLOCKED_PATHS = ['/etc/shadow', '/etc/passwd', '/etc/ssh', '/root/.ssh',
+  '.wwebjs_auth', '.owner_registered', '/opt/hermes/.env', '/opt/hermes/core/hermes-core.js'];
 
 function isCommandBlocked(command) {
   return BLOCKED_COMMANDS.some(b => command.toLowerCase().includes(b.toLowerCase()));
