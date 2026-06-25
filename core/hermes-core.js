@@ -502,16 +502,44 @@ SEGURIDAD:
     } catch (err) {
       const apiErr = err.response ? JSON.stringify(err.response.data) : (err.message || String(err));
       logger.error(`Error API (iter ${iterations}): ${apiErr}`);
-      // Context-length → poda agresiva y reintenta en vez de morir
+      // Logging detallado para diagnóstico
+      if (err.response?.data) logger.error('API response body:', JSON.stringify(err.response.data).substring(0, 500));
+      if (err.response?.status) logger.error('API status code:', err.response.status);
+      if (err.config?.url) logger.error('API endpoint:', err.config.url);
+
+      // Context-length → poda agresiva y reintenta en vez de abortar
       if (/context|too long|maximum.*tokens|length/i.test(apiErr)) {
         messages = trimMessages(messages, Math.floor(CONFIG.CONTEXT_CHAR_BUDGET / 2));
         continue;
       }
-      // Blip de red / 5xx → un reintento con espera; si ya teníamos texto, lo devolvemos
-      if (iterations < maxIterations) {
-        await new Promise(r => setTimeout(r, 2500));
-        continue;
+      // Content policy violation → el historial contiene contenido que la API rechaza.
+      // Limpiar historial y reintentar con contexto mínimo (system + último mensaje).
+      if (err.response?.status === 400 || /content_policy_violation|moderation|harassment|policy/i.test(apiErr)) {
+        logger.warn('[MODERACIÓN] Contenido rechazado por política. Limpiando historial y reintentando con contexto mínimo.');
+        if (history.length > 0) history.splice(0, history.length);
+        const lastUserMsg = messages.filter(m => m.role === 'user').pop();
+        messages = [{ role: 'system', content: systemPrompt }];
+        if (lastUserMsg) messages.push(lastUserMsg);
+        lastAssistantText = null;
+        if (iterations < maxIterations) { await new Promise(r => setTimeout(r, 1500)); continue; }
+        return '⚠️ La IA rechazó el contenido por políticas de uso. Reformula tu mensaje e inténtalo de nuevo.';
       }
+      // Timeout / 5xx / red → reintento con espera
+      if (err.code === 'ECONNABORTED' || err.message?.includes('timeout') || err.response?.status >= 500) {
+        if (iterations < maxIterations) { await new Promise(r => setTimeout(r, 2500)); continue; }
+      }
+      // Rate limit
+      if (err.response?.status === 429) {
+        if (iterations < maxIterations) { await new Promise(r => setTimeout(r, 5000)); continue; }
+        return '⚠️ Demasiadas peticiones a la IA. Espera un momento e intenta de nuevo.';
+      }
+      // Auth error
+      if (err.response?.status === 401 || err.response?.status === 403) {
+        logger.error('[AUTH] API key inválida o expirada.');
+        return '❌ Error de autenticación con la IA. La API key puede estar expirada. Contacta al administrador.';
+      }
+      // Cualquier otro error → log completo y devolver texto parcial si existe
+      logger.error('Error no clasificado API:', { status: err.response?.status, code: err.code, message: err.message });
       return lastAssistantText ? formatForWhatsApp(lastAssistantText) : null;
     }
 
